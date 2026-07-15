@@ -122,6 +122,13 @@ own offline metric. Same recipe for the moses-50 secondary columns.
 | **Deep** | dascoli | ✅ **DONE** — `submissions/deep_dascoli_submission.csv` (960 rows), Kaggle-format verified | **test BAcc@10 = 0.567** (chance 0.20) |
 | **Broad** | MEG-XL | ⏳ fine-tuning (12 subjects, L40S, ~34 min/epoch); resume-protected | TBD |
 
+**Broad run is now DETACHED** (`modal run --detach`, app `ap-40L4CM001n1cb6XKbBLYpJ`)
+so it continues on Modal independent of my local session — monitor with
+`modal app logs <id>`; the best checkpoint auto-saves to the `pnpl-work` volume at
+`/megxl/logs/checkpoint_best.pt`. Epochs are ~25 min on L40S (batch 64), ~6 h for
+15 epochs. Once done, `modal run modal/broad_submit.py::generate --track broad`
+writes the broad submission.
+
 **Broad note (preemption):** Modal preempted the A100-80GB worker mid-epoch-1 and
 restarted the function from scratch (no resume) — so I moved the run to L40S (48 GB
 is ample for these 1 s windows), enabled MEG-XL's `resume_checkpoint` (resumes from
