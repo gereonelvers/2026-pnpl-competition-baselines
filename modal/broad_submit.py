@@ -156,32 +156,31 @@ def generate(track: str = "broad", temperature: float = 0.5, batch: int = 64):
     print("holdout:", repr(holdout), holdout.counts())
 
     prim_probs, sec_probs = [], []
-    xyz_b = abc_b = types_b = mask_b = None
 
-    def run(buf):
-        pre = _preprocess(np.stack(buf), stypes_np)   # (b,306,~50)
+    def run(meg_batch):
+        pre = _preprocess(meg_batch, stypes_np)        # (b,306,~50)
+        b = pre.shape[0]
+        meg = torch.from_numpy(pre).float().to(device)
+        xyzb = xyz.unsqueeze(0).expand(b, -1, -1)
+        abcb = abc.unsqueeze(0).expand(b, -1, -1)
+        typesb = stypes.unsqueeze(0).expand(b, -1)
+        maskb = smask.unsqueeze(0).expand(b, -1)
         embs = []
         with torch.no_grad():
-            for i in range(pre.shape[0]):
-                meg = torch.from_numpy(pre[i:i+1]).float().to(device)  # (1,306,~50)
-                out = model(meg, xyz.unsqueeze(0), abc.unsqueeze(0),
-                            stypes.unsqueeze(0), smask.unsqueeze(0), apply_mask=False)
-                feats = out["features"][0]            # (306, T', 512)
-                emb = word_mlp(feats, subject_idx=-1)  # (1024,)
-                embs.append(emb.cpu().numpy())
+            out = model(meg, xyzb, abcb, typesb, maskb, apply_mask=False)
+            feats = out["features"]                    # (b,306,T',512)
+            for i in range(b):
+                embs.append(word_mlp(feats[i], subject_idx=-1).cpu().numpy())
         embs = np.stack(embs)
         prim_probs.append(_retrieval_probs(embs, prim_embs, temperature))
         sec_probs.append(_retrieval_probs(embs, sec_embs, temperature))
 
-    buf = []
-    for meg, _meta in holdout.iter_windows(batch_size=None):
-        buf.append(meg)
-        if len(buf) == batch:
-            run(buf); buf = []
-            if len(prim_probs) % 10 == 0:
-                print(f"  processed ~{len(prim_probs)*batch} windows")
-    if buf:
-        run(buf)
+    nseen = 0
+    for meg_batch, _metas in holdout.iter_windows(batch_size=batch):  # (b,306,250)
+        run(meg_batch)
+        nseen += meg_batch.shape[0]
+        if len(prim_probs) % 20 == 0:
+            print(f"  processed ~{nseen} windows")
 
     primary = np.concatenate(prim_probs)
     secondary = np.concatenate(sec_probs)
