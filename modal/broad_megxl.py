@@ -62,7 +62,15 @@ if modal.is_local():
                        ignore=["*.pyc", "__pycache__", ".git"])
         .add_local_dir(str(MEGXL_SRC), "/root/megxl", copy=True,
                        ignore=["*.pyc", "__pycache__", ".git", "assets"])
-        .run_commands("pip install --no-deps /root/pnpl")
+        .run_commands(
+            "pip install --no-deps /root/pnpl",
+            # The published MEG-XL checkpoint's hyper_parameters carry extra keys
+            # (e.g. debug_nan_checks) the current model __init__ doesn't declare.
+            # Accept + ignore unknown kwargs so `CrissCrossTransformerModule(**hparams)`
+            # works across the version gap.
+            "sed -i 's/        fourier_pos_dim: int = 250,/        fourier_pos_dim: int = 250,\\n        **kwargs,/' /root/megxl/brainstorm/models/criss_cross_transformer.py",
+            "sed -i \"s/self.save_hyperparameters(ignore=\\['tokenizer'\\])/self.save_hyperparameters(ignore=['tokenizer'] + list(kwargs.keys()))/\" /root/megxl/brainstorm/models/criss_cross_transformer.py",
+        )
         .add_local_python_source("common")
     )
 
