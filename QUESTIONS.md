@@ -76,9 +76,11 @@ own offline metric. Same recipe for the moses-50 secondary columns.
 
 ## Progress log
 
-- ✅ **Deep (dascoli) trained to BAcc@10 ≈ 0.63 on val** (from 0.21 chance), a
-  strong within-subject result. (subject 0, Sherlock1, 1 s windows, contrastive
-  t5 retrieval.) Early-stopping around epoch ~24.
+- ✅ **Deep (dascoli) DONE.** Final pipeline metrics on the 50-word vocab:
+  **val BAcc@10 = 0.629, test BAcc@10 = 0.572** (macro; chance ≈ 0.20). Strong
+  within-subject baseline (subject 0, Sherlock1, 1 s windows, contrastive t5
+  retrieval). Checkpoints saved on the Modal volume. Now generating the deep-track
+  submission (validating my holdout-window preprocessing reproduces ~0.57 first).
 - ✅ **MEG-XL quick 2-subject/1-epoch validation confirms the full fine-tuning
   loop works** (train → per-epoch eval → BAcc@10 metric → checkpoint). 1 epoch is
   at chance (0.21) as expected — the word MLP is 321M randomly-init params and
