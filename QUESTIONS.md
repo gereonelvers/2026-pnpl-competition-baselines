@@ -120,7 +120,7 @@ own offline metric. Same recipe for the moses-50 secondary columns.
 | Track | Baseline | Status | Validated quality |
 |-------|----------|--------|-------------------|
 | **Deep** | dascoli | ✅ **DONE** — `submissions/deep_dascoli_submission.csv` (960 rows), Kaggle-format verified | **test BAcc@10 = 0.567** (chance 0.20) |
-| **Broad** | MEG-XL | ⏳ fine-tuning **v2 (context)**; L40S detached, resume works, learning slowly | val 0.183→0.191 (epochs 1→2) |
+| **Broad** | MEG-XL | ⏳ fine-tuning **v2 (context)**; climbing, above chance | val 0.183→0.191→**0.244** (epochs 1→2→3) |
 
 **Broad — it IS learning with context** (val 0.183→0.191 over epochs 1–2; slow but
 climbing, unlike the isolated-window v1 which was flat at chance). Sped it up by also
