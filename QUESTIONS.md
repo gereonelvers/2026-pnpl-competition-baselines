@@ -76,6 +76,15 @@ own offline metric. Same recipe for the moses-50 secondary columns.
 
 ## Progress log
 
+- ✅ **Deep (dascoli) trained to BAcc@10 ≈ 0.63 on val** (from 0.21 chance), a
+  strong within-subject result. (subject 0, Sherlock1, 1 s windows, contrastive
+  t5 retrieval.) Early-stopping around epoch ~24.
+- ✅ **MEG-XL quick 2-subject/1-epoch validation confirms the full fine-tuning
+  loop works** (train → per-epoch eval → BAcc@10 metric → checkpoint). 1 epoch is
+  at chance (0.21) as expected — the word MLP is 321M randomly-init params and
+  needs real training. Fix applied: `num_workers=0` (h5py open-handles + DataLoader
+  fork deadlocked the first batch). Launching the full run (subjects 1–12, ~20
+  epochs, isolated 1 s windows) next.
 - ✅ **Broad (MEG-XL) fine-tuning pipeline runs end-to-end on Modal** (A100-80GB).
   Generated the Neuromag-306 sensor JSON from MNE (validated: 0 missing channels,
   0 mag/grad mismatches vs the LibriBrain h5), downloaded subjects 1–12 ses-11/12
