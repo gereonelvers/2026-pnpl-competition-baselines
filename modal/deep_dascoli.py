@@ -108,6 +108,12 @@ if modal.is_local():
             # callback writes retrieval_outputs/decoded_sentences there. Fall back
             # to $SAVEPATH so it doesn't crash on os.path.join(None, ...).
             "sed -i 's#trainer.logger.save_dir#(trainer.logger.save_dir or __import__(\"os\").environ.get(\"SAVEPATH\", \"/tmp\"))#g' /root/dascoli/sentence_decoding/callbacks.py",
+            # InitialEvaluation runs a val loop before training. Under Lightning's
+            # default inference_mode, the model's LazyLinear params materialize as
+            # *inference tensors* that then can't be used in the training backward
+            # ("Inference tensors cannot be saved for backward"). inference_mode=False
+            # makes eval use no_grad instead, so params stay normal tensors.
+            "sed -i 's/gradient_clip_val=self.trainer_config.gradient_clip_val,/gradient_clip_val=self.trainer_config.gradient_clip_val, inference_mode=False,/' /root/dascoli/sentence_decoding/main.py",
         )
         # add_local_* must be the LAST build steps (mounted on container start).
         .add_local_python_source("common")
@@ -261,6 +267,19 @@ def run_training(n_epochs: int = 50, duration: float = 1.0, fast_dev_run: bool =
 
     loaders = exp.setup_run()
     print("loaders ready. train batches:", len(loaders["train"]))
+
+    # Save the constant channel-position montage (306,2) + subject id for the
+    # submission script (the model needs channel_positions at inference).
+    import numpy as np
+    _sb = next(iter(loaders["train"]))
+    np.savez(
+        f"{SAVEPATH}/submission_assets.npz",
+        channel_positions=_sb.data["channel_positions"][0].cpu().numpy(),
+        subject_id=_sb.data["subject_id"][0].cpu().numpy(),
+        neuro_shape=np.array(list(_sb.data["neuro"].shape)),
+    )
+    print("saved submission_assets.npz; neuro shape:", tuple(_sb.data["neuro"].shape))
+    work_vol.commit()
 
     exp.fit(loaders["train"], loaders["val"])
     if not fast_dev_run:
