@@ -256,7 +256,7 @@ def finetune(subjects: int = 12, words_per_segment: int = 1,
         f"training.resume_checkpoint={LOG_DIR}/checkpoint_latest.pt",
         # Skip the expensive per-epoch test/subset evals + save checkpoint_latest
         # right after val (fast epochs, robust resume). See eval-script patch.
-        "training.skip_epoch_test_eval=true",
+        "+training.skip_epoch_test_eval=true",
         f"logging.save_dir={LOG_DIR}",
         "logging.wandb_project=pnpl-megxl",
         "evaluation.random_noise_test.enabled=false",
