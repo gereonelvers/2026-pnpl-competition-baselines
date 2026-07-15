@@ -103,9 +103,17 @@ own offline metric. Same recipe for the moses-50 secondary columns.
   Getting there required patching a few research-code quirks (offline-wandb
   save_dir, LazyModule + inference_mode, exca editable-package check) — all noted
   in the modal scripts.
-- ⏳ Deep submission script ready (`modal/deep_submit.py`): t5 retrieval over the
-  50 words → softmax, with a val/test validation harness to confirm BAcc@10 before
-  trusting the holdout. Runs once training finishes.
+- ✅ **Deep submission validated & generating.** Key finding from the val/test
+  validation harness: the dascoli model's decoding quality lives entirely in the
+  **sentence-context transformer** — the CNN branch alone (my first plan for
+  isolated words) is *below chance* (0.17) with near-collapsed embeddings, and even
+  the transformer on a single isolated word is at chance (0.19). The model needs
+  the surrounding words. Luckily **~90% of holdout rows are `sentence`-source**
+  (868/960 deep), so I reconstruct each sentence from the holdout npz and run the
+  transformer over the whole sentence (context) — the ~10% isolated `word`-source
+  rows get a length-1 pass. With this, my holdout-style preprocessing reproduces
+  the pipeline exactly: **val 0.592 / test 0.567** BAcc@10 (pipeline: 0.629/0.572).
+  Generating the deep submission now.
 
 ## Open questions / FYIs (broad / MEG-XL)
 
