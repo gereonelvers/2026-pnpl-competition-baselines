@@ -115,6 +115,20 @@ own offline metric. Same recipe for the moses-50 secondary columns.
   the pipeline exactly: **val 0.592 / test 0.567** BAcc@10 (pipeline: 0.629/0.572).
   Generating the deep submission now.
 
+## Status summary
+
+| Track | Baseline | Status | Validated quality |
+|-------|----------|--------|-------------------|
+| **Deep** | dascoli | ✅ **DONE** — `submissions/deep_dascoli_submission.csv` (960 rows), Kaggle-format verified | **test BAcc@10 = 0.567** (chance 0.20) |
+| **Broad** | MEG-XL | ⏳ fine-tuning (12 subjects, ~36 min/epoch); will stop early once val plateaus | TBD |
+
+MEG-XL processes each word independently (no cross-word transformer) and was
+fine-tuned on isolated 1 s windows, so — unlike dascoli — it needs no sentence
+context at inference, and its per-window RobustScaler preprocessing matches my
+holdout preprocessing directly. The broad submission script reuses MEG-XL's own
+inference code (sensor geometry, `_process_single_chunk`, feature slice, word MLP,
+t5 retrieval).
+
 ## Open questions / FYIs (broad / MEG-XL)
 
 - 💡 **Broad training data is only subjects 1–12** (not 1–32). The LibriBrain2
