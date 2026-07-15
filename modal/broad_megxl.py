@@ -248,6 +248,8 @@ def finetune(subjects: int = 12, words_per_segment: int = 1,
         "data.segment_length=30.0",
         f"training.num_epochs={num_epochs}",
         f"training.batch_size={batch_size}",
+        # h5py open file handles + DataLoader worker fork deadlocks; load in-process.
+        "training.num_workers=0",
         f"logging.save_dir={LOG_DIR}",
         "logging.wandb_project=pnpl-megxl",
         "evaluation.random_noise_test.enabled=false",
