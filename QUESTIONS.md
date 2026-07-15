@@ -115,18 +115,19 @@ own offline metric. Same recipe for the moses-50 secondary columns.
   the pipeline exactly: **val 0.592 / test 0.567** BAcc@10 (pipeline: 0.629/0.572).
   Generating the deep submission now.
 
-## Status summary
+## Status summary — BOTH TRACKS COMPLETE ✅
 
 | Track | Baseline | Status | Validated quality |
 |-------|----------|--------|-------------------|
 | **Deep** | dascoli | ✅ **DONE** — `submissions/deep_dascoli_submission.csv` (960 rows), Kaggle-format verified | **test BAcc@10 = 0.567** (chance 0.20) |
-| **Broad** | MEG-XL | ⏳ fine-tuning **v2 (context)**; strong climb | val 0.183→0.191→0.244→**0.322** (epochs 1→4) |
+| **Broad** | MEG-XL | ✅ **DONE** — `submissions/broad_megxl_submission.csv` (37 439 rows), Kaggle-format verified | **val BAcc@10 = 0.322** (chance 0.20) |
 
-**Broad is working well** — val BAcc@10 hit **0.322 at epoch 4** (chance 0.20), a solid
-cross-subject baseline. Letting it train out (patience 10; ReduceLROnPlateau may lift
-it further) and will generate the broad submission from `checkpoint_best.pt`. Decision:
-running to natural completion rather than stopping early, since compute budget is fine
-(~$16/$100) and later epochs may still improve it.
+Both baselines: fully trained on Modal, holdout submissions generated + verified against
+the official scorer, pushed to the repo. Broad peaked at 0.322 (epoch 4) and plateaued
+(the ReduceLROnPlateau at patience 5 didn't lift it), so I stopped the fine-tune at
+~epoch 10 rather than idle to the patience-10 early-stop. Broad submission generated from
+`checkpoint_best.pt`. **Total spend ~$18/$100; all Modal containers stopped.** Trend was
+val 0.183→0.191→0.244→**0.322** (epochs 1→4) — the context fix (see below) was decisive.
 
 **Broad — it IS learning with context** (val 0.183→0.191 over epochs 1–2; slow but
 climbing, unlike the isolated-window v1 which was flat at chance). Sped it up by also
