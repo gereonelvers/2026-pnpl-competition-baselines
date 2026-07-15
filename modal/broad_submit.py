@@ -102,23 +102,23 @@ def _sensor_tensors(device):
     return ch_names, xyz, abc, stypes, smask
 
 
-def _preprocess(meg_250, sensor_types_np):
-    """(B,306,250)@250 -> (B,306,~50)@50 with MEG-XL's baseline/robust-scale/clip."""
-    sys.path.insert(0, "/root/megxl")
+def _resample_250_to_50(meg_250):
+    """(306, T)@250 -> (306, ~T/5)@50 (mne anti-aliased resample of a whole sentence)."""
     import numpy as np, mne
-    from brainstorm.data.preprocessing import _process_single_chunk
     mne.set_log_level("ERROR")
-    B, C, T = meg_250.shape
+    C = meg_250.shape[0]
     info = mne.create_info([f"MEG{i}" for i in range(C)], 250.0, "mag")
-    out = []
-    for b in range(B):
-        raw = mne.io.RawArray(meg_250[b].astype(np.float64), info, verbose=False)
-        raw.resample(50.0, verbose=False)
-        d = raw.get_data()  # (C, ~50)
-        d = _process_single_chunk(d, sensor_types_np, sfreq=50.0,
-                                  baseline_duration=0.5, clip_range=(-5, 5))
-        out.append(d.astype(np.float32))
-    return np.stack(out)
+    raw = mne.io.RawArray(meg_250.astype(np.float64), info, verbose=False)
+    raw.resample(50.0, verbose=False)
+    return raw.get_data().astype(np.float32)
+
+
+def _proc_chunk(w50, sensor_types_np):
+    """(306, S)@50 -> MEG-XL baseline/robust-scale/clip (per word window, as in training)."""
+    sys.path.insert(0, "/root/megxl")
+    from brainstorm.data.preprocessing import _process_single_chunk
+    return _process_single_chunk(w50.astype("float64"), sensor_types_np, sfreq=50.0,
+                                 baseline_duration=0.5, clip_range=(-5, 5)).astype("float32")
 
 
 def _retrieval_probs(pred, vocab_embs, temperature=1.0):
@@ -131,12 +131,17 @@ def _retrieval_probs(pred, vocab_embs, temperature=1.0):
     return e / e.sum(axis=1, keepdims=True)
 
 
-@app.function(image=submit_image, gpu="A100-40GB", volumes=VOLUMES, timeout=6 * 60 * 60)
-def generate(track: str = "broad", temperature: float = 0.5, batch: int = 64):
+@app.function(image=submit_image, gpu="L40S", volumes=VOLUMES, timeout=6 * 60 * 60)
+def generate(track: str = "broad", temperature: float = 0.5):
+    """Context-aware submission: reconstruct each holdout sentence (concatenate its
+    word windows into one MEG-XL segment), run the backbone once, slice each word's
+    encoded-time features -> word MLP -> t5 retrieval. Isolated `word`-source rows
+    are single-word segments."""
     os.environ.setdefault("HF_HOME", "/hf-cache")
     sys.path.insert(0, "/root/megxl")
     import numpy as np, torch
-    from brainstorm.evaluate_criss_cross_word_classification import generate_word_embeddings
+    from brainstorm.evaluate_criss_cross_word_classification import (
+        generate_word_embeddings, map_raw_to_encoded_timesteps)
     from pnpl.competition import (LibriBrainCompetitionHoldout, write_submission,
                                   PRIMARY_VOCAB, SECONDARY_VOCAB)
 
@@ -144,6 +149,8 @@ def generate(track: str = "broad", temperature: float = 0.5, batch: int = 64):
     model, word_mlp = _load_models(device)
     ch_names, xyz, abc, stypes, smask = _sensor_tensors(device)
     stypes_np = stypes.cpu().numpy()
+    xyz1, abc1 = xyz.unsqueeze(0), abc.unsqueeze(0)
+    typ1, msk1 = stypes.unsqueeze(0), smask.unsqueeze(0)
 
     prim = [_normalize_word(w) for w in PRIMARY_VOCAB]
     sec = [_normalize_word(w) for w in SECONDARY_VOCAB]
@@ -154,36 +161,65 @@ def generate(track: str = "broad", temperature: float = 0.5, batch: int = 64):
 
     holdout = LibriBrainCompetitionHoldout(track=track)
     print("holdout:", repr(holdout), holdout.counts())
+    idx_of = {(m["subject"], m["source"], m["epoch"], m["word"]): m["index"]
+              for m in holdout.metadata}
+    N = len(holdout)
+    primary = np.zeros((N, len(prim)), dtype=np.float32)
+    secondary = np.zeros((N, len(sec)), dtype=np.float32)
+    W = 50  # samples per word window @ 50 Hz
 
-    prim_probs, sec_probs = [], []
+    def emit(emb_np, ix):
+        e = emb_np[None]
+        primary[ix] = _retrieval_probs(e, prim_embs, temperature)[0]
+        secondary[ix] = _retrieval_probs(e, sec_embs, temperature)[0]
 
-    def run(meg_batch):
-        pre = _preprocess(meg_batch, stypes_np)        # (b,306,~50)
-        b = pre.shape[0]
-        meg = torch.from_numpy(pre).float().to(device)
-        xyzb = xyz.unsqueeze(0).expand(b, -1, -1)
-        abcb = abc.unsqueeze(0).expand(b, -1, -1)
-        typesb = stypes.unsqueeze(0).expand(b, -1)
-        maskb = smask.unsqueeze(0).expand(b, -1)
-        embs = []
+    def word_embs_from_segment(word_windows):
+        """word_windows: list of (306,50) processed -> list of (1024,) embeddings via
+        one backbone pass over the concatenated segment + per-word feature slice."""
+        seg = np.concatenate(word_windows, axis=1)  # (306, nw*50)
+        meg = torch.from_numpy(seg).float().unsqueeze(0).to(device)
         with torch.no_grad():
-            out = model(meg, xyzb, abcb, typesb, maskb, apply_mask=False)
-            feats = out["features"]                    # (b,306,T',512)
-            for i in range(b):
-                embs.append(word_mlp(feats[i], subject_idx=-1).cpu().numpy())
-        embs = np.stack(embs)
-        prim_probs.append(_retrieval_probs(embs, prim_embs, temperature))
-        sec_probs.append(_retrieval_probs(embs, sec_embs, temperature))
+            feats = model(meg, xyz1, abc1, typ1, msk1, apply_mask=False)["features"][0]
+            outs = []
+            for j in range(len(word_windows)):
+                s_t, e_t = map_raw_to_encoded_timesteps(j * W, (j + 1) * W)
+                e_t = min(max(e_t, s_t + 1), feats.shape[1])
+                wf = feats[:, s_t:e_t, :]                       # (306, T_sub, 512)
+                outs.append(word_mlp(wf, subject_idx=-1).cpu().numpy())
+        return outs
 
-    nseen = 0
-    for meg_batch, _metas in holdout.iter_windows(batch_size=batch):  # (b,306,250)
-        run(meg_batch)
-        nseen += meg_batch.shape[0]
-        if len(prim_probs) % 20 == 0:
-            print(f"  processed ~{nseen} windows")
+    for subj in holdout.subjects:
+        # ---- sentence source: reconstruct each sentence as a segment
+        sp = holdout._ensure_file(subj, "sentence")
+        with np.load(sp, allow_pickle=True) as d:
+            meg = np.asarray(d["meg"], dtype=np.float32)
+            n_times = np.asarray(d["sentence_n_times"]).astype(int)
+            onsets = np.asarray(d["word_onsets_s"], dtype=np.float64)
+            wmask = np.asarray(d["word_mask"])
+        for si in range(meg.shape[0]):
+            sent50 = _resample_250_to_50(meg[si, :, :n_times[si]])   # (306, nt50)
+            valid = np.nonzero(wmask[si])[0]
+            wins = []
+            for wi in valid:
+                st = int(round(float(onsets[si, wi]) * 50.0))
+                w = sent50[:, st:st + W]
+                if w.shape[1] < W:  # pad tail if needed
+                    w = np.pad(w, ((0, 0), (0, W - w.shape[1])))
+                wins.append(_proc_chunk(w, stypes_np))
+            if not wins:
+                continue
+            embs = word_embs_from_segment(wins)
+            for j, wi in enumerate(valid):
+                emit(embs[j], idx_of[(subj, "sentence", si, int(wi))])
+        # ---- word source: isolated single-word segments (batched)
+        wp = holdout._ensure_file(subj, "word")
+        with np.load(wp, allow_pickle=True) as d:
+            wmeg = np.asarray(d["meg"], dtype=np.float32)  # (Nw,306,250)
+        for ei in range(wmeg.shape[0]):
+            w = _proc_chunk(_resample_250_to_50(wmeg[ei]), stypes_np)
+            emit(word_embs_from_segment([w])[0], idx_of[(subj, "word", ei, -1)])
+        print(f"  subject {subj}: sentence+word done")
 
-    primary = np.concatenate(prim_probs)
-    secondary = np.concatenate(sec_probs)
     out_dir = f"{WORK_DIR}/submissions"
     os.makedirs(out_dir, exist_ok=True)
     out = write_submission(f"{out_dir}/{track}_megxl_submission.csv",
@@ -193,4 +229,4 @@ def generate(track: str = "broad", temperature: float = 0.5, batch: int = 64):
     am = primary.argmax(1)
     uniq, cnt = np.unique(am, return_counts=True)
     print("wrote:", out, "shape:", primary.shape, "distinct argmax:", len(uniq))
-    return {"path": str(out), "n": int(primary.shape[0])}
+    return {"path": str(out), "n": int(N)}
