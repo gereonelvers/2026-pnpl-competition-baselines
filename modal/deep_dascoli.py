@@ -21,6 +21,7 @@ from common import (
     PNPL_SRC,
     hf_cache,
     work_vol,
+    VOLUMES,
     HF_CACHE_DIR,
     WORK_DIR,
     HF_ENV,
@@ -69,32 +70,44 @@ dascoli_image = (
         "requests",
         extra_index_url="https://download.pytorch.org/whl/cu121",
     )
-    # braindecode from git master (as pinned by neuraltrain). Pin torch in the
-    # same command so braindecode's resolver can't drag it forward.
+    # braindecode from git master (as pinned by neuraltrain). Pin torch AND
+    # torchaudio in the same command: braindecode pulls torchaudio, whose latest
+    # wheel is a CUDA-13 build (libcudart.so.13) incompatible with our cu121 torch.
     .pip_install(
         "braindecode@git+https://github.com/braindecode/braindecode@master",
         "torch==2.3.1",
+        "torchaudio==2.3.1",
         extra_index_url="https://download.pytorch.org/whl/cu121",
     )
     .env({**HF_ENV, "WANDB_MODE": "offline", "WANDB_SILENT": "true",
           "TOKENIZERS_PARALLELISM": "false"})
-    .add_local_python_source("common")
-    # copy source trees
-    .add_local_dir(str(PNPL_SRC), "/root/pnpl", copy=True,
-                   ignore=["*.pyc", "__pycache__", ".git"])
-    .add_local_dir(str(DASCOLI_SRC), "/root/dascoli", copy=True,
-                   ignore=["*.pyc", "__pycache__", ".git", "runs", "*.ckpt"])
-    # install the local packages (deps already present -> --no-deps)
-    .run_commands(
-        "pip install --no-deps -e /root/pnpl",
-        "pip install --no-deps -e /root/dascoli/neuralset",
-        "pip install --no-deps -e /root/dascoli/neuraltrain",
-        # main.py imports WandbLogger from the standalone pytorch_lightning
-        # namespace; we only ship the `lightning` package. Same class, so point
-        # the import at lightning.pytorch to avoid a second lightning distro.
-        "sed -i 's/from pytorch_lightning.loggers import WandbLogger/from lightning.pytorch.loggers import WandbLogger/' /root/dascoli/sentence_decoding/main.py",
-    )
 )
+
+# Local-only build steps (copy source, install editable, patch import). Guarded
+# so re-importing this module inside a container doesn't touch host paths.
+if modal.is_local():
+    dascoli_image = (
+        dascoli_image
+        # copy source trees (copy=True so subsequent build steps can use them)
+        .add_local_dir(str(PNPL_SRC), "/root/pnpl", copy=True,
+                       ignore=["*.pyc", "__pycache__", ".git"])
+        .add_local_dir(str(DASCOLI_SRC), "/root/dascoli", copy=True,
+                       ignore=["*.pyc", "__pycache__", ".git", "runs", "*.ckpt"])
+        .run_commands(
+            # Non-editable installs: packages land in site-packages, avoiding the
+            # namespace-package collision between the copied /root/dascoli/{neuralset,
+            # neuraltrain} project dirs and `import neuralset`/`import neuraltrain`.
+            # Only /root/dascoli/sentence_decoding is imported from the source tree.
+            "pip install --no-deps /root/pnpl",
+            "pip install --no-deps /root/dascoli/neuralset",
+            "pip install --no-deps /root/dascoli/neuraltrain",
+            # main.py imports WandbLogger from standalone pytorch_lightning; we
+            # ship only `lightning`. Same class -> repoint to lightning.pytorch.
+            "sed -i 's/from pytorch_lightning.loggers import WandbLogger/from lightning.pytorch.loggers import WandbLogger/' /root/dascoli/sentence_decoding/main.py",
+        )
+        # add_local_* must be the LAST build steps (mounted on container start).
+        .add_local_python_source("common")
+    )
 
 app = modal.App("pnpl-deep-dascoli")
 
@@ -120,7 +133,13 @@ def _ensure_dirs():
 @app.function(image=dascoli_image, timeout=20 * 60)
 def smoke_imports():
     """Cheap CPU check: everything imports, model builds, forward runs."""
-    sys.path.insert(0, "/root/dascoli")
+    # env is read at import time by defaults.py -> set before importing the grid.
+    for k, v in {"SAVEPATH": "/tmp/sp", "DATAPATH": "/tmp/dp",
+                 "LIBRIBRAIN100_PATH": "/tmp/dp/LibriBrain100"}.items():
+        os.environ[k] = v
+    for p in ("/tmp/sp/cache", "/tmp/sp/results", "/tmp/dp", "/tmp/dp/LibriBrain100"):
+        os.makedirs(p, exist_ok=True)
+    sys.path.append("/root/dascoli")
     import torch
 
     import neuralset  # noqa
@@ -130,6 +149,7 @@ def smoke_imports():
     print("pnpl vocab:", len(PRIMARY_VOCAB))
 
     # import the training entry points
+    from neuraltrain.utils import update_config
     from sentence_decoding.main import Experiment  # noqa
     from sentence_decoding.grids.defaults import default_config
     from sentence_decoding.grids.libribrain100 import (
@@ -138,17 +158,24 @@ def smoke_imports():
     print("grid vocab size:", len(LIBRIBRAIN100_50_WORD_VOCABULARY))
     print("default duration:", default_config["data"]["duration"])
 
+    # Validate the whole config via pydantic (the real training entry path).
+    cfg = update_config(updated_config, {
+        "infra.workdir": None,
+        "retrieval_metrics": [m for m in updated_config["retrieval_metrics"]
+                              if m["name"] in ("Rank", "TopkAcc")],
+    })
+    exp = Experiment(**cfg)
+    print("Experiment built OK; infra.folder:", exp.infra.folder)
+
     # Build the brain model + transformer at the real dims and run a forward.
-    from neuraltrain.models import __dict__ as _m  # noqa
-    from sentence_decoding.main import ModelConfig
-    bm_cfg = ModelConfig(**default_config["brain_model_config"])
-    tr_cfg = ModelConfig(**default_config["transformer_config"])
+    # ModelConfig is a discriminated Union alias, so use the concrete classes.
+    from neuraltrain.models import SimpleConvTimeAggConfig, TransformerEncoderConfig
+    bm_cfg = SimpleConvTimeAggConfig(**default_config["brain_model_config"])
+    tr_cfg = TransformerEncoderConfig(**default_config["transformer_config"])
     brain_model = bm_cfg.build(n_in_channels=306, n_outputs=1024)
     transformer = tr_cfg.build(dim=1024)
-    n_params = sum(p.numel() for p in brain_model.parameters())
-    n_params_tr = sum(p.numel() for p in transformer.parameters())
-    print(f"brain_model params: {n_params/1e6:.1f}M  transformer params: {n_params_tr/1e6:.1f}M")
 
+    # Forward first (LazyModules initialize their params on first forward).
     B, C, T = 4, 306, 50   # 1 s @ 50 Hz
     x = torch.randn(B, C, T)
     subject_ids = torch.zeros(B, dtype=torch.long)
@@ -157,6 +184,14 @@ def smoke_imports():
         y = brain_model(x, subject_ids, channel_positions)
     print("brain_model output:", tuple(y.shape))
     assert y.shape == (B, 1024), y.shape
+
+    def _count(m):
+        try:
+            return sum(p.numel() for p in m.parameters())
+        except ValueError:
+            return -1  # still has uninitialized lazy params (not forwarded)
+    print(f"brain_model params: {_count(brain_model)/1e6:.1f}M  "
+          f"transformer params (may be lazy): {_count(transformer)/1e6:.1f}M")
 
     # SigLip loss builds
     from sentence_decoding.main import LossConfig
@@ -182,7 +217,7 @@ def run_training(n_epochs: int = 50, duration: float = 1.0, fast_dev_run: bool =
     # env vars are read at import time by the grid/defaults modules -> set first.
     os.environ.update(RUN_ENV)
     _ensure_dirs()
-    sys.path.insert(0, "/root/dascoli")
+    sys.path.append("/root/dascoli")
 
     import glob
     import torch
@@ -208,6 +243,10 @@ def run_training(n_epochs: int = 50, duration: float = 1.0, fast_dev_run: bool =
         "retrieval_metrics": retrieval_metrics,
         "trainer_config.n_epochs": n_epochs,
         "trainer_config.fast_dev_run": fast_dev_run,
+        # exca's WorkDir would require neuralset/neuraltrain to be *editable*
+        # installs (for copying source to remote workers). We run locally
+        # (cluster=None) and bypass @infra.apply, so drop the copied packages.
+        "infra.workdir": None,
     }
     config = update_config(updated_config, overrides)
     print("duration:", config["data"]["duration"], "batch:", config["data"]["batch_size"],
