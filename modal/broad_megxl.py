@@ -146,12 +146,14 @@ def make_sensor_json():
     coil_by_name = {}
     for ch in raw.info["chs"]:
         coil = int(ch["coil_type"])
+        # MNE sample uses old Neuromag names "MEG 0111"; LibriBrain uses "MEG0111".
+        name = ch["ch_name"].replace(" ", "")
         sensors.append({
-            "ch_name": ch["ch_name"],
+            "ch_name": name,
             "coil_type": coil,
             "loc": [float(x) for x in ch["loc"]],
         })
-        coil_by_name[ch["ch_name"]] = coil
+        coil_by_name[name] = coil
 
     # Cross-check against a real LibriBrain h5's channel_names + channel_types.
     h5 = hf_hub_download(
@@ -211,6 +213,58 @@ def download_data(subjects: int = 12):
     evs = glob.glob(f"{DATA_ROOT}/Sherlock1/derivatives/events/*.tsv")
     print(f"downloaded {got} files ({missing} missing). h5={len(h5s)} events={len(evs)}")
     return {"h5": len(h5s), "events": len(evs), "missing": missing}
+
+
+@app.function(image=megxl_image, gpu="A100-80GB", volumes=VOLUMES,
+              timeout=12 * 60 * 60, memory=64 * 1024)
+def finetune(subjects: int = 12, words_per_segment: int = 1,
+             subsegment_duration: float = 1.0, num_epochs: int = 50,
+             batch_size: int = 16, quick: bool = False):
+    """Fine-tune MEG-XL for word decoding on broad subjects 1..N via the repo's
+    hydra entry point. Isolated 1 s windows (words_per_segment=1) to match the
+    competition holdout. Reports val/test balanced_top10_accuracy_datafit50."""
+    import subprocess
+    from huggingface_hub import hf_hub_download
+
+    _dirs()
+    os.environ.update({"HYDRA_FULL_ERROR": "1"})
+
+    ckpt = hf_hub_download(MEGXL_HF_REPO, MEGXL_CKPT)
+    if quick:
+        subjects, num_epochs = 2, 1
+
+    subs = "[" + ",".join(f"sub-{i}" for i in range(1, subjects + 1)) + "]"
+    overrides = [
+        "hydra.job.chdir=False",
+        f"hydra.run.dir={LOG_DIR}/hydra",
+        f"data.root=[{DATA_ROOT}]",
+        f"data.cache_dir={CACHE_DIR}",
+        f"data.subjects={subs}",
+        f"model.criss_cross_checkpoint={ckpt}",
+        f"model.tokenizer_checkpoint={BIOCODEC_CKPT}",
+        f"data.subsegment_duration={subsegment_duration}",
+        f"data.words_per_segment={words_per_segment}",
+        "data.window_onset_offset=0.0",   # holdout window starts AT word onset
+        "data.segment_length=30.0",
+        f"training.num_epochs={num_epochs}",
+        f"training.batch_size={batch_size}",
+        f"logging.save_dir={LOG_DIR}",
+        "logging.wandb_project=pnpl-megxl",
+        "evaluation.random_noise_test.enabled=false",
+    ]
+    cmd = ["python", "-m", "brainstorm.evaluate_criss_cross_word_classification",
+           "--config-name=eval_criss_cross_word_classification_libribrain100_multisub_train",
+           *overrides]
+    print("CMD:", " ".join(cmd))
+    env = dict(os.environ)
+    env["PYTHONUNBUFFERED"] = "1"
+    proc = subprocess.run(cmd, cwd="/root/megxl", env=env)
+    work_vol.commit()
+    print("return code:", proc.returncode)
+    import glob
+    ckpts = glob.glob(f"{LOG_DIR}/**/checkpoint_best.pt", recursive=True)
+    print("best checkpoints:", ckpts)
+    return {"returncode": proc.returncode, "checkpoints": ckpts}
 
 
 @app.local_entrypoint()
