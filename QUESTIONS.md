@@ -120,7 +120,13 @@ own offline metric. Same recipe for the moses-50 secondary columns.
 | Track | Baseline | Status | Validated quality |
 |-------|----------|--------|-------------------|
 | **Deep** | dascoli | ✅ **DONE** — `submissions/deep_dascoli_submission.csv` (960 rows), Kaggle-format verified | **test BAcc@10 = 0.567** (chance 0.20) |
-| **Broad** | MEG-XL | ⏳ fine-tuning **v2 (context)**; climbing, above chance | val 0.183→0.191→**0.244** (epochs 1→2→3) |
+| **Broad** | MEG-XL | ⏳ fine-tuning **v2 (context)**; strong climb | val 0.183→0.191→0.244→**0.322** (epochs 1→4) |
+
+**Broad is working well** — val BAcc@10 hit **0.322 at epoch 4** (chance 0.20), a solid
+cross-subject baseline. Letting it train out (patience 10; ReduceLROnPlateau may lift
+it further) and will generate the broad submission from `checkpoint_best.pt`. Decision:
+running to natural completion rather than stopping early, since compute budget is fine
+(~$16/$100) and later epochs may still improve it.
 
 **Broad — it IS learning with context** (val 0.183→0.191 over epochs 1–2; slow but
 climbing, unlike the isolated-window v1 which was flat at chance). Sped it up by also
