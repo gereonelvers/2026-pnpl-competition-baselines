@@ -104,6 +104,10 @@ if modal.is_local():
             # main.py imports WandbLogger from standalone pytorch_lightning; we
             # ship only `lightning`. Same class -> repoint to lightning.pytorch.
             "sed -i 's/from pytorch_lightning.loggers import WandbLogger/from lightning.pytorch.loggers import WandbLogger/' /root/dascoli/sentence_decoding/main.py",
+            # The offline WandbLogger returns save_dir=None; the TestRetrieval
+            # callback writes retrieval_outputs/decoded_sentences there. Fall back
+            # to $SAVEPATH so it doesn't crash on os.path.join(None, ...).
+            "sed -i 's#trainer.logger.save_dir#(trainer.logger.save_dir or __import__(\"os\").environ.get(\"SAVEPATH\", \"/tmp\"))#g' /root/dascoli/sentence_decoding/callbacks.py",
         )
         # add_local_* must be the LAST build steps (mounted on container start).
         .add_local_python_source("common")
