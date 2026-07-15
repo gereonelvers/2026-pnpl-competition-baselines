@@ -120,7 +120,21 @@ own offline metric. Same recipe for the moses-50 secondary columns.
 | Track | Baseline | Status | Validated quality |
 |-------|----------|--------|-------------------|
 | **Deep** | dascoli | ✅ **DONE** — `submissions/deep_dascoli_submission.csv` (960 rows), Kaggle-format verified | **test BAcc@10 = 0.567** (chance 0.20) |
-| **Broad** | MEG-XL | ⏳ fine-tuning (12 subjects, L40S, ~34 min/epoch); resume-protected | TBD |
+| **Broad** | MEG-XL | ⏳ fine-tuning **v2 (context)**; L40S detached, resume-robust | TBD |
+
+**Broad update — pivoted to context-based training.** The first MEG-XL attempt used
+isolated 1 s windows (`words_per_segment=1`) and got stuck at chance (val 0.2075).
+Root cause is architectural: MEG-XL's criss-cross transformer was pre-trained on
+long 150 s segments (625 encoded steps); an isolated 1 s window is only ~5 steps, so
+its temporal attention has almost no context and the features aren't
+word-discriminative. Just like dascoli, MEG-XL needs context. So v2 trains on
+**concatenated multi-word segments** (`words_per_segment=20`, 1 s subsegments →
+~20 s of context) and, at inference, **reconstructs each holdout sentence** (its word
+windows concatenated into one segment) and slices each word's encoded-time features —
+the ~90% sentence-source rows get context; the ~10% isolated word-source rows are
+single-word segments. I also patched the eval script to skip the redundant per-epoch
+test/subset evals and to save `checkpoint_latest` right after val (fast, resume-safe
+epochs). Watching whether val now climbs above chance.
 
 **Broad run is now DETACHED** (`modal run --detach`, app `ap-40L4CM001n1cb6XKbBLYpJ`)
 so it continues on Modal independent of my local session — monitor with
