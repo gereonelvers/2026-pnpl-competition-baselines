@@ -71,4 +71,5 @@ pnpl_cpu_image = _add_pnpl(
         "requests",
     )
     .env(HF_ENV)
+    .add_local_python_source("common")
 )
