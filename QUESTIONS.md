@@ -74,12 +74,38 @@ own offline metric. Same recipe for the moses-50 secondary columns.
 
 ---
 
-## Open questions
+## Progress log
 
-- ❓ **Nothing blocking yet.** Proceeding with the deep (dascoli) baseline first
-  (cheaper GPU, ~8–16 GB), then broad (MEG-XL, needs A100-80GB/H100). Will add
-  concrete questions here if I hit a real fork. Check the decisions above and veto
-  any you disagree with.
+- ✅ **Deep (dascoli) is training successfully on Modal** (L4 GPU). Full pipeline
+  works end-to-end: pnpl data download → neuralset preprocessing (filter/resample/
+  RobustScaler) → t5-large targets → SimpleConv+Transformer contrastive training.
+  Pre-training chance baseline = 0.213 BAcc@10 (≈ random 0.20, as expected); by
+  epoch 4 it's at **0.399 and still climbing**. 50 epochs w/ early stopping.
+  Getting there required patching a few research-code quirks (offline-wandb
+  save_dir, LazyModule + inference_mode, exca editable-package check) — all noted
+  in the modal scripts.
+- ⏳ Deep submission script ready (`modal/deep_submit.py`): t5 retrieval over the
+  50 words → softmax, with a val/test validation harness to confirm BAcc@10 before
+  trusting the holdout. Runs once training finishes.
+
+## Open questions / FYIs (broad / MEG-XL)
+
+- 💡 **Broad training data is only subjects 1–12** (not 1–32). The LibriBrain2
+  serialised h5 upload is incomplete: events.tsv exist for subjects 1–32 but the
+  MEG `.h5` files only exist for **subjects 1–12** (13–32 return HTTP 404). So
+  MEG-XL fine-tunes on subjects 1–12 (Sherlock1 ses-11 = train, ses-12 = test, per
+  the paper's broad split — broad has no train partition). This is still a genuine
+  cross-subject setup: the holdout evaluates subjects 1–39, so 13–39 are entirely
+  unseen. → If more subjects get uploaded, I can re-run; flag if you expect them.
+- 💡 **Sensor geometry for MEG-XL.** The model needs 3D sensor positions/orientations,
+  but the pnpl h5 files carry only `channel_names` (standard Neuromag MEG0111…MEG2643)
+  + `channel_types` (mag/grad), **no 3D geometry**, and no `meg_sensors_information.json`
+  ships in the repos. I generate the JSON from MNE's standard Neuromag-306 device
+  geometry — which is exactly what the pretrained MEG-XL expects, since its
+  pretraining corpora (CamCAN/MOUS/SMN4Lang) are all Elekta Neuromag 306 systems
+  with the same fixed helmet geometry. Positions are normalized + the backbone is
+  fine-tuned, so this is faithful.
+- ❓ Nothing blocking. Veto any decision above if you disagree.
 
 ---
 

@@ -11,6 +11,8 @@ image = (
     .pip_install("h5py", "numpy", "huggingface_hub", "hf_transfer", "mne")
     .env(HF_ENV)
 )
+if modal.is_local():
+    image = image.add_local_python_source("common")
 
 
 @app.function(image=image, volumes=VOLUMES, timeout=30 * 60)
