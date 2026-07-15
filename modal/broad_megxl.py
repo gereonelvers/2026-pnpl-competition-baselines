@@ -277,12 +277,14 @@ def finetune(subjects: int = 12, words_per_segment: int = 1,
 
 
 @app.function(image=megxl_image, volumes=VOLUMES, timeout=20 * 60)
-def inspect_ckpt():
-    """Read the live checkpoint_best.pt's stored metadata (best val, epoch, config)."""
+def inspect_ckpt(which: str = "latest"):
+    """Read checkpoint metadata. `latest` -> current epoch + best-so-far (tracks
+    progress); `best` -> the best-val checkpoint used for the submission."""
     import torch, glob
-    cks = sorted(glob.glob(f"{LOG_DIR}/**/checkpoint_best.pt", recursive=True))
+    name = "checkpoint_latest.pt" if which == "latest" else "checkpoint_best.pt"
+    cks = sorted(glob.glob(f"{LOG_DIR}/**/{name}", recursive=True))
     if not cks:
-        print("no checkpoint_best.pt yet")
+        print(f"no {name} yet")
         return {}
     ck = torch.load(cks[-1], map_location="cpu", weights_only=False)
     meta = {k: v for k, v in ck.items()
