@@ -215,8 +215,8 @@ def download_data(subjects: int = 12):
     return {"h5": len(h5s), "events": len(evs), "missing": missing}
 
 
-@app.function(image=megxl_image, gpu="A100-80GB", volumes=VOLUMES,
-              timeout=12 * 60 * 60, memory=64 * 1024)
+@app.function(image=megxl_image, gpu="L40S", volumes=VOLUMES,
+              timeout=24 * 60 * 60, memory=64 * 1024, retries=3)
 def finetune(subjects: int = 12, words_per_segment: int = 1,
              subsegment_duration: float = 1.0, num_epochs: int = 50,
              batch_size: int = 16, quick: bool = False):
@@ -246,10 +246,14 @@ def finetune(subjects: int = 12, words_per_segment: int = 1,
         f"data.words_per_segment={words_per_segment}",
         "data.window_onset_offset=0.0",   # holdout window starts AT word onset
         "data.segment_length=30.0",
+        f"t5.cache_dir={CACHE_DIR}/t5_emb",   # persist t5 embeddings across restarts
         f"training.num_epochs={num_epochs}",
         f"training.batch_size={batch_size}",
         # h5py open file handles + DataLoader worker fork deadlocks; load in-process.
         "training.num_workers=0",
+        # Modal can preempt the GPU worker; resume from the per-epoch checkpoint so
+        # restarts don't lose progress (no-op on the first run — file won't exist).
+        f"training.resume_checkpoint={LOG_DIR}/checkpoint_latest.pt",
         f"logging.save_dir={LOG_DIR}",
         "logging.wandb_project=pnpl-megxl",
         "evaluation.random_noise_test.enabled=false",
