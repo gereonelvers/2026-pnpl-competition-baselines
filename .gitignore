@@ -1,0 +1,15 @@
+# Large data / model artifacts — never commit
+*.h5
+*.npz
+*.ckpt
+*.pt
+*.pth
+data/
+checkpoints/
+wandb/
+lightning_logs/
+__pycache__/
+*.pyc
+.DS_Store
+
+# Keep generated submissions (they are small CSVs) — do NOT ignore submissions/
