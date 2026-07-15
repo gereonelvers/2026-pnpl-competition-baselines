@@ -254,6 +254,9 @@ def finetune(subjects: int = 12, words_per_segment: int = 1,
         # Modal can preempt the GPU worker; resume from the per-epoch checkpoint so
         # restarts don't lose progress (no-op on the first run — file won't exist).
         f"training.resume_checkpoint={LOG_DIR}/checkpoint_latest.pt",
+        # Skip the expensive per-epoch test/subset evals + save checkpoint_latest
+        # right after val (fast epochs, robust resume). See eval-script patch.
+        "training.skip_epoch_test_eval=true",
         f"logging.save_dir={LOG_DIR}",
         "logging.wandb_project=pnpl-megxl",
         "evaluation.random_noise_test.enabled=false",
@@ -271,6 +274,32 @@ def finetune(subjects: int = 12, words_per_segment: int = 1,
     ckpts = glob.glob(f"{LOG_DIR}/**/checkpoint_best.pt", recursive=True)
     print("best checkpoints:", ckpts)
     return {"returncode": proc.returncode, "checkpoints": ckpts}
+
+
+@app.function(image=megxl_image, volumes=VOLUMES, timeout=20 * 60)
+def inspect_ckpt():
+    """Read the live checkpoint_best.pt's stored metadata (best val, epoch, config)."""
+    import torch, glob
+    cks = sorted(glob.glob(f"{LOG_DIR}/**/checkpoint_best.pt", recursive=True))
+    if not cks:
+        print("no checkpoint_best.pt yet")
+        return {}
+    ck = torch.load(cks[-1], map_location="cpu", weights_only=False)
+    meta = {k: v for k, v in ck.items()
+            if k not in ("criss_cross_state_dict", "word_mlp_state_dict",
+                         "optimizer_state_dict", "scheduler_state_dict", "config")}
+    print("checkpoint:", cks[-1])
+    print("keys:", list(ck.keys()))
+    for k, v in meta.items():
+        if isinstance(v, dict):
+            print(f"  {k}: {{ {', '.join(f'{kk}={vv}' for kk, vv in list(v.items())[:6])} }}")
+        else:
+            print(f"  {k}: {v}")
+    # word_mlp num_subjects (film) sanity
+    ws = ck["word_mlp_state_dict"]
+    if "subject_embedding.weight" in ws:
+        print("  word_mlp num_subjects:", ws["subject_embedding.weight"].shape[0])
+    return meta
 
 
 @app.local_entrypoint()
