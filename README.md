@@ -30,6 +30,36 @@ submissions/  Generated submission CSVs (committed — they are small)
 QUESTIONS.md  Async Q&A / decision log
 ```
 
+## Results
+
+Both baselines trained on Modal and produced valid, Kaggle-format submissions
+(verified against the official Top-10 Balanced Accuracy scorer). Chance ≈ 0.20.
+
+| Track | Baseline | Submission | Validated BAcc@10 |
+|-------|----------|------------|-------------------|
+| Deep | dascoli | `submissions/deep_dascoli_submission.csv` (960 rows) | **test 0.567** / val 0.629 |
+| Broad | MEG-XL | `submissions/broad_megxl_submission.csv` (37 439 rows) | **val 0.322** |
+
+Both are well above the 0.20 chance level. Full method notes are in `notes/`, and
+the running decision log is in `QUESTIONS.md`.
+
+### Key methodological finding
+
+Both baselines are **retrieval models** (predict a 1024-d `t5-large` word embedding,
+rank by cosine similarity) whose decoding quality depends on **sentence context**:
+
+- **dascoli**: the sentence-context transformer does the work — the CNN branch alone
+  is *below* chance on isolated words.
+- **MEG-XL**: its criss-cross transformer was pretrained on long (~625-step) segments,
+  so isolated 1 s windows (~5 steps) fail; it needs multi-word context.
+
+Since ~90 % of holdout rows are `sentence`-source, the submissions **reconstruct each
+sentence** and give the model its context; the ~10 % isolated `word`-source rows are
+handled without it. Holdout preprocessing was validated to reproduce each pipeline's
+own val/test BAcc@10 before trusting the holdout.
+
 ## Status
 
-Work in progress. See `QUESTIONS.md` for the running log.
+Deep track complete. Broad track: a valid submission is in place (val 0.322); the
+fine-tune may still be running to a natural stop — the submission is regenerated if a
+later epoch beats the current best. See `QUESTIONS.md` for the running log.
