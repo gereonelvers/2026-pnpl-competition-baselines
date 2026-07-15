@@ -120,7 +120,16 @@ own offline metric. Same recipe for the moses-50 secondary columns.
 | Track | Baseline | Status | Validated quality |
 |-------|----------|--------|-------------------|
 | **Deep** | dascoli | ✅ **DONE** — `submissions/deep_dascoli_submission.csv` (960 rows), Kaggle-format verified | **test BAcc@10 = 0.567** (chance 0.20) |
-| **Broad** | MEG-XL | ⏳ fine-tuning (12 subjects, ~36 min/epoch); will stop early once val plateaus | TBD |
+| **Broad** | MEG-XL | ⏳ fine-tuning (12 subjects, L40S, ~34 min/epoch); resume-protected | TBD |
+
+**Broad note (preemption):** Modal preempted the A100-80GB worker mid-epoch-1 and
+restarted the function from scratch (no resume) — so I moved the run to L40S (48 GB
+is ample for these 1 s windows), enabled MEG-XL's `resume_checkpoint` (resumes from
+the per-epoch `checkpoint_latest.pt`), persisted the t5-embedding cache, and set
+`retries=3`. Now a preemption just resumes from the last completed epoch. Epochs are
+~34 min (the per-epoch full val eval dominates), so this takes a while wall-clock;
+I'll stop it once val BAcc@10 plateaus and generate the submission from the best
+checkpoint.
 
 MEG-XL processes each word independently (no cross-word transformer) and was
 fine-tuned on isolated 1 s windows, so — unlike dascoli — it needs no sentence
