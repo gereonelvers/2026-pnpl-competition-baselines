@@ -76,6 +76,14 @@ own offline metric. Same recipe for the moses-50 secondary columns.
 
 ## Progress log
 
+- ✅ **Broad (MEG-XL) fine-tuning pipeline runs end-to-end on Modal** (A100-80GB).
+  Generated the Neuromag-306 sensor JSON from MNE (validated: 0 missing channels,
+  0 mag/grad mismatches vs the LibriBrain h5), downloaded subjects 1–12 ses-11/12
+  into the loader's layout, and the repo's hydra fine-tuning entry point loads the
+  BioCodec tokenizer + pretrained MEG-XL checkpoint, finds the data, preprocesses
+  to 50 Hz, computes t5 targets, and trains. Using isolated 1 s windows
+  (words_per_segment=1, window_onset_offset=0) to match the competition holdout.
+  Quick 2-subject/1-epoch validation run in progress; full run next.
 - ✅ **Deep (dascoli) is training successfully on Modal** (L4 GPU). Full pipeline
   works end-to-end: pnpl data download → neuralset preprocessing (filter/resample/
   RobustScaler) → t5-large targets → SimpleConv+Transformer contrastive training.
