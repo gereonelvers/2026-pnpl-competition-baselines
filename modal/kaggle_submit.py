@@ -24,8 +24,9 @@ if modal.is_local():
     img = img.add_local_python_source("common")
 
 SECRET = modal.Secret.from_name("pnpl-kaggle-token")
-SLUG = "pnpl-competition-2026-broad"
-FILES = {"deep": "deep_dascoli_submission.csv", "broad": "broad_megxl_submission.csv"}
+SLUG = "pnpl-competition-2026"
+FILES = {"deep": "deep_dascoli_submission.csv", "broad": "broad_megxl_submission.csv",
+         "test": "test_pnpl2026_submission.csv"}
 
 
 def _kaggle(*args):
@@ -48,6 +49,33 @@ def inspect(slug: str = SLUG):
     _kaggle("competitions", "list", "-s", "pnpl")
     _kaggle("competitions", "files", "-c", slug)
     _kaggle("competitions", "submissions", "-c", slug)
+    return {"ok": True}
+
+
+@app.function(image=img, volumes=VOLUMES, secrets=[SECRET], timeout=15 * 60)
+def leaderboard(slug: str = SLUG):
+    _kaggle("competitions", "leaderboard", slug, "--show")
+    return {"ok": True}
+
+
+@app.function(image=img, volumes=VOLUMES, secrets=[SECRET], timeout=20 * 60)
+def show_example(slug: str = SLUG):
+    """Download + display the competition's example submission (expected format)."""
+    import tempfile, glob, zipfile
+    import pandas as pd
+    from kaggle.api.kaggle_api_extended import KaggleApi
+    api = KaggleApi(); api.authenticate()
+    d = tempfile.mkdtemp()
+    api.competition_download_files(slug, path=d, quiet=True)
+    for z in glob.glob(f"{d}/*.zip"):
+        zipfile.ZipFile(z).extractall(d)
+    for f in glob.glob(f"{d}/*.csv"):
+        df = pd.read_csv(f)
+        print(f"\n=== {f.split('/')[-1]}  shape={df.shape} ===")
+        print("columns:", list(df.columns)[:8], "..." if df.shape[1] > 8 else "",
+              "| last:", list(df.columns)[-3:])
+        print("index range:", df.iloc[:, 0].min(), "..", df.iloc[:, 0].max())
+        print(df.head(4).to_string()[:1000])
     return {"ok": True}
 
 
@@ -101,14 +129,23 @@ def diagnose(slug: str = SLUG):
 
 
 @app.function(image=img, volumes=VOLUMES, secrets=[SECRET], timeout=30 * 60)
-def submit(track: str = "broad", message: str = "baseline", slug: str = SLUG):
-    path = f"{WORK_DIR}/submissions/{FILES[track]}"
+def submit(track: str = "test", message: str = "baseline", slug: str = SLUG,
+           filename: str = ""):
+    path = f"{WORK_DIR}/submissions/{filename or FILES[track]}"
     if not os.path.exists(path):
         raise FileNotFoundError(path)
+    from kaggle.api.kaggle_api_extended import KaggleApi
     import pandas as pd
     df = pd.read_csv(path)
-    print(f"submitting {track}: {path}  shape={df.shape}  -> competition {slug}")
-    p = _kaggle("competitions", "submit", "-c", slug, "-f", path, "-m", message)
-    ok = p.returncode == 0 and "successfully submitted" in (p.stdout + p.stderr).lower()
-    return {"track": track, "rc": p.returncode, "success": ok,
-            "stdout": p.stdout[-500:], "stderr": p.stderr[-500:]}
+    print(f"submitting {path}  shape={df.shape}  -> competition {slug}")
+    api = KaggleApi(); api.authenticate()
+    try:
+        api.competition_submit(path, message, slug)
+        print("submit: OK (accepted)")
+        ok = True; err = ""
+    except Exception as e:
+        r = getattr(e, "response", None)
+        err = (r.text if r is not None else str(e))[:800]
+        print("submit FAILED:", err)
+        ok = False
+    return {"file": path, "slug": slug, "success": ok, "error": err}
