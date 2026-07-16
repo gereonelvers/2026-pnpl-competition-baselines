@@ -32,15 +32,18 @@ QUESTIONS.md  Async Q&A / decision log
 
 ## Results
 
-Both baselines trained on Modal and produced valid, Kaggle-format submissions
-(verified against the official Top-10 Balanced Accuracy scorer). Chance ≈ 0.20.
+Both baselines trained on Modal and produced valid, Kaggle-format submissions.
+**Chance BAcc@10 = 0.20** (50-word top-10, macro-averaged), chance BAcc@1 = 0.02.
 
-| Track | Baseline | Submission | Validated BAcc@10 |
-|-------|----------|------------|-------------------|
-| Deep | dascoli | `submissions/deep_dascoli_submission.csv` (960 rows) | **test 0.567** / val 0.629 |
-| Broad | MEG-XL | `submissions/broad_megxl_submission.csv` (37 439 rows) | **val 0.322** |
+Scored on a real holdout label file (`solution.csv`), both are well above chance:
 
-Both are well above the 0.20 chance level. Full method notes are in `notes/`, and
+| Track | Baseline | Submission | **Holdout BAcc@10** | (train val / test) |
+|-------|----------|------------|---------------------|--------------------|
+| Deep | dascoli | `submissions/deep_dascoli_submission.csv` (960 rows) | **0.467** (~2.3× chance) | 0.629 / 0.567 |
+| Broad | MEG-XL | `submissions/broad_megxl_submission.csv` (37 439 rows) | **0.308** (~1.5× chance) | 0.322 / — |
+
+See **[`RESULTS.md`](RESULTS.md)** for the full scored table (incl. empirical chance
+baselines) and **step-by-step reproduction instructions**. Method notes are in `notes/`;
 the running decision log is in `QUESTIONS.md`.
 
 ### Key methodological finding

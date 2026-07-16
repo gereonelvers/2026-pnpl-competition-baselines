@@ -13,3 +13,7 @@ __pycache__/
 .DS_Store
 
 # Keep generated submissions (they are small CSVs) — do NOT ignore submissions/
+
+# Holdout ground-truth labels — never commit (leak risk)
+solution.csv
+*_solution.csv
