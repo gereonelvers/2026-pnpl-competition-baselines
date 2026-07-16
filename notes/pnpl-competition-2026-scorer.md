@@ -72,6 +72,47 @@ correct = (top10 == solution['label_encoded'].to_numpy()[:, None]).any(axis=1)
 With this fix the oracle scores 1.0, random ≈ 0.20, and the combined baseline should land
 around its true holdout BAcc@10 (deep ≈ 0.47 on subject 0, broad ≈ 0.31 on 1–39).
 
+## Corrected notebook — `balanced-accuracy-fixed.ipynb` (verified)
+
+A drop-in replacement is in the repo root: `runner/balanced-accuracy-fixed.ipynb` (same
+structure + format checks as the original; only the two scoring lines changed). Verified
+by `score_solution.py::verify_fixed_notebook`, loading the actual notebook file and
+scoring known-answer submissions:
+
+| Submission | Broken notebook | **Fixed notebook** | Expected |
+|------------|-----------------|--------------------|----------|
+| Oracle (p=1 on true word) | 0.20 | **1.00**\* | 1.0 |
+| Random noise | 0.19 | **0.2045** | ~0.20 |
+| Combined baseline (all 34 720 rows) | **0.17435** | **0.3117** | above chance |
+| &nbsp;&nbsp;↳ deep rows only (subject 0) | — | **0.4672** | 0.4672 (matches our independent scorer) |
+| &nbsp;&nbsp;↳ broad rows only (subj 1–39) | — | **0.3077** | 0.3077 (matches our independent scorer) |
+
+The per-track numbers reproduce our independent scorer **exactly**, which is the strongest
+confirmation the fix is correct. The doctest still returns `0.06` (unchanged).
+
+\* The synthetic oracle (built with `target_classes` as columns) scores exactly 1.0. On
+the *real* solution it reads 0.98 for the reason below — a quirk of building the oracle,
+not the notebook.
+
+## Third issue: `it's` vs `its` (notebook hardcode ≠ vocabulary.csv)
+
+`load_vocabulary("primary")[34]` is **`it's`** (curly apostrophe ’, = "it is"), but the
+notebook's hardcoded `target_classes[34]` is **`its`** (possessive). They sit at the same
+position, so positional scoring is unaffected *as long as* the solution uses one spelling
+consistently — this `solution.csv` uses `its`, which matches the hardcoded list, so
+scoring is correct today. But it is fragile:
+
+- `target_classes` is used to *filter* solution rows (`solution['label'].isin(target_classes)`).
+  If a future solution uses the `vocabulary.csv` spelling `it's`, the class silently drops
+  and everyone's score is capped near 49/50.
+- Recommendation: make the notebook derive `target_classes` from `vocabulary.csv` (a
+  competition data file) instead of hardcoding, or normalise apostrophes on both sides,
+  so the notebook, `vocabulary.csv`, and the solution can't drift apart.
+
+(Our submissions are built from `load_vocabulary`, so their column 34 is the `it's` slot;
+positionally it lines up with the solution's class 34, confirmed by the exact per-track
+match above.)
+
 ## Reproduce
 
 ```bash

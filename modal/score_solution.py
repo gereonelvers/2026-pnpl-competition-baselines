@@ -139,6 +139,85 @@ def score_with_notebook(sub_name: str = "test_pnpl2026_submission.csv"):
     return {"notebook_score": s, "rows": len(sub), "cols": sub.shape[1]}
 
 
+@app.function(image=pnpl_cpu_image, volumes=VOLUMES, timeout=15 * 60)
+def oracle_debug():
+    import numpy as np, pandas as pd
+    from pnpl.competition import load_vocabulary
+    target = ['is','the','a','to','it','i','not','was','we','be','he','that','have','this','they','of',
+              'there','and','are','in','but','will','so','all','my','for','she','were','any','really',
+              'at','out','our','am','its','had','him','an','very','has','do','can','time','think','good',
+              'always','new','people','as','on']
+    vocab = list(load_vocabulary("primary"))
+    print("vocab == target_classes (same order):", vocab == target)
+    print("set diff vocab-target:", set(vocab) - set(target), "| target-vocab:", set(target) - set(vocab))
+    mism = [(i, vocab[i], target[i]) for i in range(50) if vocab[i] != target[i]]
+    print("position mismatches:", mism[:10])
+    sol = pd.read_csv("/work/solution.csv")
+    lab = sol["label"].str.lower()
+    v2i = {w: i for i, w in enumerate(vocab)}
+    unmapped = sorted(set(lab[lab.map(v2i).isna()]))
+    print("labels not in vocab (sample):", unmapped[:15], "| n_unmapped_rows:", int(lab.map(v2i).isna().sum()))
+    in_t = lab.isin(target)
+    print("in-target rows:", int(in_t.sum()), "| distinct in-target words:", lab[in_t].nunique())
+    return {"vocab_eq_target": vocab == target}
+
+
+@app.function(image=pnpl_cpu_image, volumes=VOLUMES, timeout=20 * 60)
+def verify_fixed_notebook(nb_name: str = "balanced-accuracy-fixed.ipynb"):
+    """Load the ACTUAL corrected notebook from the volume, exec its score(), and run it
+    on the real submissions + a real oracle. Expect: oracle 1.0, noise ~0.20, and the
+    per-track numbers to match our independent scorer (deep ~0.47 / broad ~0.31)."""
+    import json, numpy as np, pandas as pd
+    from pnpl.competition import load_vocabulary
+
+    nb = json.load(open(f"{WORK_DIR}/{nb_name}"))
+    src = nb["cells"][0]["source"]
+    if isinstance(src, list):
+        src = "".join(src)
+    ns = {}
+    exec(src, ns)
+    score = ns["score"]
+
+    vocab = list(load_vocabulary("primary"))
+    moses_cols = [f"moses_{w}" for w in load_vocabulary("moses")]
+    sol_meta = pd.read_csv("/work/solution.csv")
+    sol = sol_meta[["id", "label"]]
+    deep_ids = set(sol_meta.loc[sol_meta["subj_id"] == 0, "id"])
+    broad_ids = set(sol_meta.loc[sol_meta["subj_id"] != 0, "id"])
+
+    def run(sub, subset=None):
+        s, u = sol, sub
+        if subset is not None:
+            s = sol[sol["id"].isin(subset)]
+            u = sub[sub["id"].isin(subset)]
+        s = s.sort_values("id").reset_index(drop=True)
+        u = u.sort_values("id").reset_index(drop=True)
+        return round(score(s.copy(), u.copy(), "id"), 4)
+
+    test = pd.read_csv(f"{WORK_DIR}/submissions/test_pnpl2026_submission.csv")
+    noise = pd.read_csv(f"{WORK_DIR}/submissions/noise_pnpl2026_submission.csv")
+
+    # Real oracle: p=1.0 on the true word (0 elsewhere), matching solution.csv rows
+    lab = sol_meta["label"].str.lower()
+    v2i = {w: i for i, w in enumerate(vocab)}
+    oi = lab.map(v2i)  # NaN if OOV
+    P = np.zeros((len(sol_meta), len(vocab)))
+    ok = oi.notna().to_numpy()
+    P[np.arange(len(sol_meta))[ok], oi[ok].astype(int).to_numpy()] = 1.0
+    oracle = pd.DataFrame(P, columns=vocab)
+    for c in moses_cols:
+        oracle[c] = 0.0
+    oracle.insert(0, "id", sol_meta["id"].to_numpy())
+
+    print("=== fixed notebook on real data ===")
+    print("  oracle (p=1 on true word)   :", run(oracle), "  (expect 1.0)")
+    print("  noise baseline              :", run(noise), "  (expect ~0.20)")
+    print("  combined baseline (all rows):", run(test))
+    print("  combined -> deep rows only  :", run(test, deep_ids), "  (indep scorer: 0.4672)")
+    print("  combined -> broad rows only :", run(test, broad_ids), " (indep scorer: 0.3077)")
+    return {"ok": True}
+
+
 @app.function(image=pnpl_cpu_image, volumes=VOLUMES, timeout=20 * 60)
 def diagnose_scorer():
     """Sanity-check balanced-acccuracy.ipynb by scoring synthetic submissions whose
