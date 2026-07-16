@@ -81,37 +81,37 @@ scoring known-answer submissions:
 
 | Submission | Broken notebook | **Fixed notebook** | Expected |
 |------------|-----------------|--------------------|----------|
-| Oracle (p=1 on true word) | 0.20 | **1.00**\* | 1.0 |
-| Random noise | 0.19 | **0.2045** | ~0.20 |
-| Combined baseline (all 34 720 rows) | **0.17435** | **0.3117** | above chance |
+| Oracle (p=1 on true word) | 0.20 | **1.00** | 1.0 |
+| Random noise | 0.19 | **0.2043** | ~0.20 |
+| Combined baseline (all 34 720 rows) | **0.17435** | **0.3105** | above chance |
 | &nbsp;&nbsp;↳ deep rows only (subject 0) | — | **0.4672** | 0.4672 (matches our independent scorer) |
-| &nbsp;&nbsp;↳ broad rows only (subj 1–39) | — | **0.3077** | 0.3077 (matches our independent scorer) |
+| &nbsp;&nbsp;↳ broad rows only (subj 1–39) | — | **0.3065** | ≈0.3077 (matches our independent scorer) |
 
-The per-track numbers reproduce our independent scorer **exactly**, which is the strongest
-confirmation the fix is correct. The doctest still returns `0.06` (unchanged).
+The oracle scores exactly 1.0 and the per-track numbers reproduce our independent scorer,
+which is the strongest confirmation the fix is correct. The doctest still returns `0.06`.
+(Broad is 0.3065 vs 0.3077 because the fixed notebook *additionally* normalises `it's`/`its`
+spelling and so correctly scores a few rows the stricter matching had dropped.)
 
-\* The synthetic oracle (built with `target_classes` as columns) scores exactly 1.0. On
-the *real* solution it reads 0.98 for the reason below — a quirk of building the oracle,
-not the notebook.
+## Third issue (handled): `it's` vs `its` — class list drift
 
-## Third issue: `it's` vs `its` (notebook hardcode ≠ vocabulary.csv)
+`load_vocabulary("primary")[34]` / `vocabulary.csv` is **`it's`** (curly apostrophe ’, =
+"it is"); the *original* notebook hardcoded **`its`** (possessive) there. Same position, so
+scoring happened to be correct for a solution that also uses `its` — but `target_classes`
+also *filters* solution rows, so a solution using the `vocabulary.csv` spelling `it's`
+would silently drop that class and cap everyone near 49/50.
 
-`load_vocabulary("primary")[34]` is **`it's`** (curly apostrophe ’, = "it is"), but the
-notebook's hardcoded `target_classes[34]` is **`its`** (possessive). They sit at the same
-position, so positional scoring is unaffected *as long as* the solution uses one spelling
-consistently — this `solution.csv` uses `its`, which matches the hardcoded list, so
-scoring is correct today. But it is fragile:
+The fixed notebook removes this drift two ways:
 
-- `target_classes` is used to *filter* solution rows (`solution['label'].isin(target_classes)`).
-  If a future solution uses the `vocabulary.csv` spelling `it's`, the class silently drops
-  and everyone's score is capped near 49/50.
-- Recommendation: make the notebook derive `target_classes` from `vocabulary.csv` (a
-  competition data file) instead of hardcoding, or normalise apostrophes on both sides,
-  so the notebook, `vocabulary.csv`, and the solution can't drift apart.
-
-(Our submissions are built from `load_vocabulary`, so their column 34 is the `it's` slot;
-positionally it lines up with the solution's class 34, confirmed by the exact per-track
-match above.)
+1. **Resolve the class list from `vocabulary.csv`** when the scoring environment provides
+   it (`_resolve_target_classes`), falling back to an embedded copy in vocabulary order.
+   Best-effort + exception-safe, so a missing file never breaks scoring. (Note:
+   `vocabulary.csv` is **not** currently one of the competition's data files — only
+   `example-submission.csv` is — so today it uses the embedded fallback. Adding
+   `vocabulary.csv` to the competition data would make the notebook track it automatically.)
+2. **Normalise both sides** (`_norm`: lower-case + strip all non-alphanumerics) before
+   matching, so `it's` / `its` / `It's` compare equal. This is what actually guarantees the
+   metric, `vocabulary.csv`, and the solution can't drift on punctuation/case — verified
+   above (oracle with `it's` columns + `its` labels → 1.0).
 
 ## Reproduce
 

@@ -197,10 +197,13 @@ def verify_fixed_notebook(nb_name: str = "balanced-accuracy-fixed.ipynb"):
     test = pd.read_csv(f"{WORK_DIR}/submissions/test_pnpl2026_submission.csv")
     noise = pd.read_csv(f"{WORK_DIR}/submissions/noise_pnpl2026_submission.csv")
 
-    # Real oracle: p=1.0 on the true word (0 elsewhere), matching solution.csv rows
-    lab = sol_meta["label"].str.lower()
-    v2i = {w: i for i, w in enumerate(vocab)}
-    oi = lab.map(v2i)  # NaN if OOV
+    # Real oracle: p=1.0 on the true word (0 elsewhere), matching solution.csv rows.
+    # Use the same normalisation the fixed notebook uses so it's/its line up -> exact 1.0.
+    def _n(w):
+        return "".join(ch for ch in str(w).lower() if ch.isalnum())
+    vnorm = [_n(w) for w in vocab]
+    nmap = {w: i for i, w in enumerate(vnorm)}
+    oi = sol_meta["label"].map(_n).map(nmap)  # NaN if OOV
     P = np.zeros((len(sol_meta), len(vocab)))
     ok = oi.notna().to_numpy()
     P[np.arange(len(sol_meta))[ok], oi[ok].astype(int).to_numpy()] = 1.0
