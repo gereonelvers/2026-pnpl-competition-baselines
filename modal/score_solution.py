@@ -26,6 +26,29 @@ def _bacc(probs, y_true, k):
     return float(np.mean(recalls))
 
 
+@app.function(image=pnpl_cpu_image, volumes=VOLUMES, timeout=15 * 60)
+def split_submission(src: str = "test_pnpl2026_submission.csv"):
+    """Split a combined submission (id + 50 primary + 50 moses) into two per-track files
+    by subject: subject 0 (deep) and subjects 1-39 (broad). Row order + columns preserved."""
+    import pandas as pd
+    sol = pd.read_csv("/work/solution.csv")[["id", "subj_id"]]
+    sub = pd.read_csv(f"{WORK_DIR}/submissions/{src}")
+    merged = sub.merge(sol, on="id", how="left")
+    assert merged["subj_id"].notna().all(), "some ids not found in solution.csv"
+
+    outputs = {}
+    for name, keep in (("deep_track_submission.csv", merged["subj_id"] == 0),
+                       ("broad_track_submission.csv", merged["subj_id"] != 0)):
+        df = merged[keep].drop(columns=["subj_id"])
+        p = f"{WORK_DIR}/submissions/{name}"
+        df.to_csv(p, index=False)
+        subs = sorted(sol.loc[sol["id"].isin(df["id"]), "subj_id"].unique().tolist())
+        print(f"wrote {p}  shape={df.shape}  cols[0]={df.columns[0]!r}  subjects={subs[:3]}{'...' if len(subs)>3 else ''} (n={len(subs)})")
+        outputs[name] = {"rows": len(df), "cols": df.shape[1]}
+    work_vol.commit()
+    return outputs
+
+
 @app.function(image=pnpl_cpu_image, volumes=VOLUMES, timeout=40 * 60)
 def build_test_submission(out_name: str = "test_pnpl2026_submission.csv"):
     """Build ONE combined submission matching solution.csv (the pnpl-competition-2026
@@ -137,6 +160,41 @@ def score_with_notebook(sub_name: str = "test_pnpl2026_submission.csv"):
     s = score(sol.copy(), sub.copy(), "id")
     print(f"notebook score() on {sub_name}: {s}")
     return {"notebook_score": s, "rows": len(sub), "cols": sub.shape[1]}
+
+
+@app.function(image=pnpl_cpu_image, volumes=VOLUMES, timeout=15 * 60)
+def score_public(nb_name: str = "balanced-accuracy-fixed.ipynb"):
+    """Reproduce the live Kaggle scores by scoring on the solution's Public / Private
+    splits (Kaggle's public leaderboard uses only Usage=='Public')."""
+    import json, pandas as pd
+    nb = json.load(open(f"{WORK_DIR}/{nb_name}"))
+    src = nb["cells"][0]["source"]
+    src = "".join(src) if isinstance(src, list) else src
+    ns = {}
+    exec(src, ns)
+    score = ns["score"]
+
+    solf = pd.read_csv("/work/solution.csv")
+    ucol = next((c for c in solf.columns if c.lower() == "usage"), None)
+    print("solution columns:", list(solf.columns))
+    print("usage column:", ucol, "| counts:",
+          solf[ucol].value_counts().to_dict() if ucol else "none")
+
+    def run(sub_name, usage=None):
+        sub = pd.read_csv(f"{WORK_DIR}/submissions/{sub_name}")
+        s = solf[["id", "label"]].copy()
+        u = sub
+        if usage is not None and ucol:
+            ids = set(solf.loc[solf[ucol].astype(str).str.lower() == usage.lower(), "id"])
+            s = s[s["id"].isin(ids)]
+            u = u[u["id"].isin(ids)]
+        s = s.sort_values("id").reset_index(drop=True)
+        u = u.sort_values("id").reset_index(drop=True)
+        return round(score(s.copy(), u.copy(), "id"), 5)
+
+    for name in ("test_pnpl2026_submission.csv", "noise2_pnpl2026_submission.csv"):
+        print(f"{name}\n    full={run(name)}  Public={run(name, 'Public')}  Private={run(name, 'Private')}")
+    return {"ok": True}
 
 
 @app.function(image=pnpl_cpu_image, volumes=VOLUMES, timeout=15 * 60)
