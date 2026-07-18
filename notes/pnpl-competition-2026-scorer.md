@@ -113,6 +113,49 @@ The fixed notebook removes this drift two ways:
    metric, `vocabulary.csv`, and the solution can't drift on punctuation/case — verified
    above (oracle with `it's` columns + `its` labels → 1.0).
 
+## Per-track competitions (`-deep` / `-broad`): `index`-keyed, full holdout
+
+The two per-track competitions use a **different id space** from the combined one. Their
+example submissions are keyed by **`index`** (not `id`) over the **full** per-track holdout:
+
+| Competition | Row-id col | Rows | Composition |
+|-------------|-----------|------|-------------|
+| `pnpl-competition-2026` (combined) | `id` | 34 720 | sentence-source union of all 40 subjects |
+| `pnpl-competition-2026-deep` | `index` | 960 | subject 0: 868 sentence + 92 word |
+| `pnpl-competition-2026-broad` | `index` | 37 439 | subjects 1–39: 33 852 sentence + 3 587 word |
+
+So a per-track solution is **not** a re-based slice of `solution.csv` — it must span the full
+`index` 0…N-1, because that's what a per-track submission uses. `build_track_solutions`
+builds them: it places our sentence-source labels at their holdout `index` (via the
+`(subject, epoch, onset)` metadata join) and marks every other row (the isolated `word`
+rows, which we have no labels for) `Usage="Ignored"` so Kaggle excludes them.
+
+Deliverables (both gitignored — ground truth):
+
+| Solution | Rows | Public / Private / Ignored |
+|----------|------|----------------------------|
+| `deep_solution.csv` (`index`,`label`,`Usage`) | 960 | 290 / 578 / 92 |
+| `broad_solution.csv` | 37 439 | 11 310 / 22 542 / 3 587 |
+
+The matching **submissions** are the already-built full-holdout, index-keyed files
+`deep_dascoli_submission.csv` (960) and `broad_megxl_submission.csv` (37 439) — *not* the
+`*_track_submission.csv` files (those are the by-subject split of the combined `id` space,
+useful for per-subject analysis but the wrong shape for the per-track competitions).
+
+The scorer notebook now checks the first column against **`row_id_column_name`** (Kaggle
+passes `index` for the per-track competitions, `id` for the combined) instead of hardcoding
+`id`, so **one notebook works for all three competitions**. Verified end-to-end
+(`verify_track_solutions`), Ignored rows excluded like Kaggle does:
+
+| Track | vs solution | all-labeled | Public | Private |
+|-------|-------------|-------------|--------|---------|
+| deep  | `deep_dascoli` | 0.467 (n=868) | 0.444 | 0.417 |
+| broad | `broad_megxl` | 0.307 (n=33 852) | 0.241 | 0.284 |
+
+**To set up each per-track competition:** upload `{track}_solution.csv` as the solution and
+`balanced-accuracy-fixed.ipynb` as the metric; participants submit index-keyed full-holdout
+files (like the competition's example submission).
+
 ## Reproduce
 
 ```bash

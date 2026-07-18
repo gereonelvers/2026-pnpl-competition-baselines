@@ -26,6 +26,137 @@ def _bacc(probs, y_true, k):
     return float(np.mean(recalls))
 
 
+@app.function(image=pnpl_cpu_image, volumes=VOLUMES, timeout=20 * 60)
+def verify_track_solutions(nb_name: str = "balanced-accuracy-fixed.ipynb"):
+    """End-to-end check of the per-track solutions: score the FULL-holdout per-track
+    submissions (deep_dascoli / broad_megxl, index-keyed) against {track}_solution.csv with
+    the generalized notebook, mimicking Kaggle's Usage split (Ignored rows excluded)."""
+    import json, pandas as pd
+    nb = json.load(open(f"{WORK_DIR}/{nb_name}"))
+    src = nb["cells"][0]["source"]
+    src = "".join(src) if isinstance(src, list) else src
+    ns = {}
+    exec(src, ns)
+    score = ns["score"]
+
+    for track, subfile in (("deep", "deep_dascoli_submission.csv"),
+                           ("broad", "broad_megxl_submission.csv")):
+        soln = pd.read_csv(f"/work/{track}_solution.csv")
+        sub = pd.read_csv(f"{WORK_DIR}/submissions/{subfile}")
+        assert sub.columns[0] == "index", f"{subfile} first col is {sub.columns[0]!r}"
+
+        def run(usage=None):
+            s = soln[soln["Usage"] != "Ignored"] if usage is None else soln[soln["Usage"] == usage]
+            u = sub[sub["index"].isin(set(s["index"]))]
+            s = s[["index", "label"]].sort_values("index").reset_index(drop=True)
+            u = u.sort_values("index").reset_index(drop=True)
+            return f"{round(score(s.copy(), u.copy(), 'index'), 5)} (n={len(s)})"
+
+        print(f"{track} ({subfile}): all-labeled={run()}  Public={run('Public')}  Private={run('Private')}")
+    return {"ok": True}
+
+
+@app.function(image=pnpl_cpu_image, volumes=VOLUMES, timeout=45 * 60)
+def build_track_solutions(dummy_label: str = "is"):
+    """Build per-track solution files on the FULL per-track holdout index (0..N-1) — the
+    id space that per-track submissions actually use (see the -deep/-broad example
+    submissions). Our sentence-source labels are placed at their holdout indices; every
+    other row (isolated 'word' rows without labels) is marked Usage='Ignored' so Kaggle
+    excludes it from scoring. Row-id column is 'index' to match the per-track submissions."""
+    import pandas as pd
+    from pnpl.competition import LibriBrainCompetitionHoldout
+
+    sol = pd.read_csv("/work/solution.csv")
+    out = {}
+    for track, mask in (("deep", sol["subj_id"] == 0), ("broad", sol["subj_id"] != 0)):
+        s = sol[mask]
+        ho = LibriBrainCompetitionHoldout(track=track)
+        meta = ho.metadata
+        lut = {(m["subject"], m["epoch"], round(float(m["onset_s"]), 4)): m["index"]
+               for m in meta if m["source"] == "sentence"}
+        idx_lab, idx_use, miss = {}, {}, 0
+        for r in s.itertuples():
+            fi = lut.get((int(r.subj_id), int(r.sentence_epoch_index), round(float(r.word_onset_s), 4)))
+            if fi is None:
+                miss += 1
+                continue
+            idx_lab[fi] = r.label
+            idx_use[fi] = r.Usage
+        recs = [(m["index"], idx_lab.get(m["index"], dummy_label),
+                 idx_use.get(m["index"], "Ignored")) for m in meta]
+        df = pd.DataFrame(recs, columns=["index", "label", "Usage"]).sort_values("index").reset_index(drop=True)
+        p = f"/work/{track}_solution.csv"
+        df.to_csv(p, index=False)
+        print(f"{track}: N={len(df)}  labeled={len(idx_lab)}  ignored={len(df) - len(idx_lab)}  "
+              f"unmapped_solution_rows={miss}  index {df['index'].min()}..{df['index'].max()}  "
+              f"Usage={df['Usage'].value_counts().to_dict()}")
+        out[track] = {"N": len(df), "labeled": len(idx_lab), "miss": miss}
+    work_vol.commit()
+    return out
+
+
+@app.function(image=pnpl_cpu_image, volumes=VOLUMES, timeout=30 * 60)
+def inspect_track_ids():
+    """Figure out the canonical per-track id space (what a per-track submission uses) and
+    how our sentence-source solution rows map onto each full per-track holdout."""
+    import numpy as np, pandas as pd
+    from pnpl.competition import LibriBrainCompetitionHoldout
+
+    sol = pd.read_csv("/work/solution.csv")
+    for track, mask in (("deep", sol["subj_id"] == 0), ("broad", sol["subj_id"] != 0)):
+        s = sol[mask].reset_index(drop=True)
+        ho = LibriBrainCompetitionHoldout(track=track)
+        try:
+            N = len(ho)
+        except Exception:
+            N = len(ho.metadata)
+        srcs = {}
+        for m in ho.metadata:
+            srcs[m.get("source", "?")] = srcs.get(m.get("source", "?"), 0) + 1
+        lut = {(m["subject"], m["epoch"], round(float(m["onset_s"]), 4)): m["index"]
+               for m in ho.metadata if m["source"] == "sentence"}
+        flat = pd.Series([lut.get((int(r.subj_id), int(r.sentence_epoch_index), round(float(r.word_onset_s), 4)))
+                          for r in s.itertuples()])
+        fok = flat.dropna().astype(int)
+        print(f"\n=== {track} ===")
+        print(f"  full holdout rows N={N}   metadata source counts={srcs}")
+        print(f"  our solution rows={len(s)}  matched_to_holdout={flat.notna().sum()}")
+        print(f"  solution 'id' range: {s['id'].min()}..{s['id'].max()}")
+        print(f"  solution 'index' col range: {s['index'].min()}..{s['index'].max()}  nunique={s['index'].nunique()}")
+        print(f"  mapped holdout flat-index range: {fok.min()}..{fok.max()}  nunique={fok.nunique()}")
+        print(f"  solution['index'] == holdout flat-index for all rows: "
+              f"{bool((s['index'].reset_index(drop=True) == flat.reset_index(drop=True)).all())}")
+        # is a plain 0-based rebasing of global id equal to the holdout flat index?
+        rebased = (s['id'] - s['id'].min()).reset_index(drop=True)
+        print(f"  (id - id.min()) == holdout flat-index for all rows: "
+              f"{bool((rebased == flat.reset_index(drop=True)).all())}")
+    return {"ok": True}
+
+
+@app.function(image=pnpl_cpu_image, volumes=VOLUMES, timeout=15 * 60)
+def split_solution(src: str = "solution.csv"):
+    """Split the solution/label file by subject into two per-track solution files, mirroring
+    split_submission so the ids line up. Keeps all columns (incl. Usage) unchanged."""
+    import pandas as pd
+    sol = pd.read_csv(f"/work/{src}")
+    ucol = next((c for c in sol.columns if c.lower() == "usage"), None)
+    print("columns:", list(sol.columns))
+
+    out = {}
+    for name, keep in (("deep_solution.csv", sol["subj_id"] == 0),
+                       ("broad_solution.csv", sol["subj_id"] != 0)):
+        df = sol[keep]
+        p = f"/work/{name}"
+        df.to_csv(p, index=False)
+        usage = df[ucol].value_counts().to_dict() if ucol else None
+        subs = sorted(df["subj_id"].unique().tolist())
+        print(f"wrote {p}  shape={df.shape}  id {df['id'].min()}..{df['id'].max()}  "
+              f"subjects={subs[:3]}{'...' if len(subs) > 3 else ''} (n={len(subs)})  Usage={usage}")
+        out[name] = {"rows": len(df), "usage": usage}
+    work_vol.commit()
+    return out
+
+
 @app.function(image=pnpl_cpu_image, volumes=VOLUMES, timeout=15 * 60)
 def split_submission(src: str = "test_pnpl2026_submission.csv"):
     """Split a combined submission (id + 50 primary + 50 moses) into two per-track files
