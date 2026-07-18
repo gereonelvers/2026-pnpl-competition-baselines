@@ -12,7 +12,7 @@ import subprocess
 
 import modal
 
-from common import VOLUMES, WORK_DIR
+from common import VOLUMES, WORK_DIR, add_pnpl
 
 app = modal.App("pnpl-kaggle-submit")
 
@@ -20,8 +20,14 @@ img = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install("kaggle>=2.0", "pandas")
 )
+# The edited local pnpl + kaggle, to exercise pnpl.competition.submit_to_kaggle itself.
+# Build steps must precede any add_local_* step, so install into a fresh base then add_pnpl.
+helper_img = add_pnpl(
+    modal.Image.debian_slim(python_version="3.11").pip_install("numpy", "pandas", "kaggle>=2.0")
+)
 if modal.is_local():
     img = img.add_local_python_source("common")
+    helper_img = helper_img.add_local_python_source("common")
 
 SECRET = modal.Secret.from_name("pnpl-kaggle-token")
 SLUG = "pnpl-competition-2026"
@@ -50,6 +56,32 @@ def inspect(slug: str = SLUG):
     _kaggle("competitions", "files", "-c", slug)
     _kaggle("competitions", "submissions", "-c", slug)
     return {"ok": True}
+
+
+@app.function(image=helper_img, volumes=VOLUMES, secrets=[SECRET], timeout=20 * 60)
+def test_pnpl_helper():
+    """Exercise the library helper pnpl.competition.submit_to_kaggle end-to-end, incl. the
+    new deep/broad shorthands. Combined comp is configured (expect success); deep is not yet
+    configured (expect a clean failure that proves the shorthand reached the right slug)."""
+    from pnpl.competition import submit_to_kaggle, resolve_competition, PNPL_2026_COMPETITIONS
+    print("PNPL_2026_COMPETITIONS =", PNPL_2026_COMPETITIONS)
+    print("resolve('deep') =", resolve_competition("deep"),
+          "| resolve('broad') =", resolve_competition("broad"))
+
+    print("\n[1] helper -> combined competition (full slug, should SUCCEED):")
+    r1 = submit_to_kaggle(f"{WORK_DIR}/submissions/test_pnpl2026_submission.csv",
+                          competition="pnpl-competition-2026",
+                          message="via pnpl.submit_to_kaggle helper", check=False)
+    print("   result:", r1)
+    print("   -> competition field:", r1.competition, "| success:", r1.success)
+
+    print("\n[2] helper -> 'deep' shorthand (resolves to per-track slug):")
+    r2 = submit_to_kaggle(f"{WORK_DIR}/submissions/deep_dascoli_submission.csv",
+                          competition="deep",
+                          message="via pnpl helper (deep shorthand)", check=False)
+    print("   result:", r2)
+    print("   -> competition field:", r2.competition, "| success:", r2.success)
+    return {"combined_success": bool(r1.success), "deep_slug": r2.competition}
 
 
 @app.function(image=img, volumes=VOLUMES, secrets=[SECRET], timeout=15 * 60)
