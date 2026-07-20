@@ -80,9 +80,9 @@ reconstructs each holdout sentence and runs the transformer with context.
 ```bash
 modal run broad_megxl.py::smoke                                           # loads BioCodec + pretrained MEG-XL
 modal run broad_megxl.py::make_sensor_json                                # Neuromag-306 sensor geometry (from MNE)
-modal run broad_megxl.py::download_data --subjects 12                     # subjects 1–12 (only these have MEG on HF)
+modal run broad_megxl.py::download_data --subjects 32                     # subjects 1–32
 modal run --detach broad_megxl.py::finetune \
-    --subjects 12 --num-epochs 15 --batch-size 4 \
+    --subjects 32 --num-epochs 15 --batch-size 4 \
     --words-per-segment 20 --subsegment-duration 1.0                      # ~20 s context segments; resume-safe
 modal run broad_submit.py::generate --track broad                         # -> /submissions/broad_megxl_submission.csv
 ```

@@ -85,11 +85,11 @@ own offline metric. Same recipe for the moses-50 secondary columns.
   loop works** (train → per-epoch eval → BAcc@10 metric → checkpoint). 1 epoch is
   at chance (0.21) as expected — the word MLP is 321M randomly-init params and
   needs real training. Fix applied: `num_workers=0` (h5py open-handles + DataLoader
-  fork deadlocked the first batch). Launching the full run (subjects 1–12, ~20
+  fork deadlocked the first batch). Launching the full run (subjects 1–32, ~20
   epochs, isolated 1 s windows) next.
 - ✅ **Broad (MEG-XL) fine-tuning pipeline runs end-to-end on Modal** (A100-80GB).
   Generated the Neuromag-306 sensor JSON from MNE (validated: 0 missing channels,
-  0 mag/grad mismatches vs the LibriBrain h5), downloaded subjects 1–12 ses-11/12
+  0 mag/grad mismatches vs the LibriBrain h5), downloaded subjects 1–32 ses-11/12
   into the loader's layout, and the repo's hydra fine-tuning entry point loads the
   BioCodec tokenizer + pretrained MEG-XL checkpoint, finds the data, preprocesses
   to 50 Hz, computes t5 targets, and trains. Using isolated 1 s windows
@@ -177,13 +177,13 @@ t5 retrieval).
 
 ## Open questions / FYIs (broad / MEG-XL)
 
-- 💡 **Broad training data is only subjects 1–12** (not 1–32). The LibriBrain2
-  serialised h5 upload is incomplete: events.tsv exist for subjects 1–32 but the
-  MEG `.h5` files only exist for **subjects 1–12** (13–32 return HTTP 404). So
-  MEG-XL fine-tunes on subjects 1–12 (Sherlock1 ses-11 = train, ses-12 = test, per
-  the paper's broad split — broad has no train partition). This is still a genuine
-  cross-subject setup: the holdout evaluates subjects 1–39, so 13–39 are entirely
-  unseen. → If more subjects get uploaded, I can re-run; flag if you expect them.
+- 💡 **Broad training data is subjects 1–32.** LibriBrain2 stores subjects 1–12
+  under `Sherlock1/derivatives/serialised` and subjects 13–32 under
+  `Sherlock1/derivatives/serialised_competition`; the MEG-XL loader already
+  supports both folders via `include_competition_serialised=true`. MEG-XL
+  fine-tunes on subjects 1–32 (Sherlock1 ses-11 = train, ses-12 = test, per the
+  paper's broad split — broad has no train partition), then the holdout evaluates
+  subjects 1–39.
 - 💡 **Sensor geometry for MEG-XL.** The model needs 3D sensor positions/orientations,
   but the pnpl h5 files carry only `channel_names` (standard Neuromag MEG0111…MEG2643)
   + `channel_types` (mag/grad), **no 3D geometry**, and no `meg_sensors_information.json`
